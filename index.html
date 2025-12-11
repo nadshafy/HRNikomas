@@ -275,11 +275,13 @@
 
         // --- 7. Logic Rendering Komponen Halaman ---
 
+        // Fungsi yang menghasilkan HTML untuk halaman Tambah Karyawan
         function getAddEmployeeHTML() {
             // Ambil data Divisi dan Jabatan dari state global
             const jobs = window.jobsData.length > 0 ? window.jobsData : Object.keys(window.MOCK_JOB_COMPETENCIES);
             const divisions = window.divisionsData.length > 0 ? window.divisionsData : ['Produksi 1', 'QA/QC', 'HR'];
             
+            // Set default job untuk memastikan tampilan standar kompetensi muncul saat load
             const defaultJob = jobs[0]; 
             
             let jobOptions = jobs.map(j => `<option value="${j}">${j}</option>`).join('');
@@ -287,7 +289,7 @@
 
             return `
                 <div class="p-6 bg-white rounded-xl shadow-lg border border-gray-100 max-w-4xl mx-auto">
-                    <h2 class="text-2xl font-bold text-gray-800 mb-4">Tambah Profil Karyawan (HR Admin)</h2>
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4">Tambah Profil Karyawan (FR-01)</h2>
                     <p class="text-sm text-gray-500 mb-6">
                       Gunakan formulir ini untuk membuat entri karyawan baru dan menetapkan Standar Kompetensi Ideal berdasarkan jabatan (FR-01, FR-02).
                     </p>
@@ -323,7 +325,7 @@
                         <h3 class="text-lg font-semibold mt-6 text-indigo-600">Standar Kompetensi Ideal (Level 1-5)</h3>
                         <p class="text-sm text-gray-500">Nilai ini otomatis ditetapkan berdasarkan Jabatan yang dipilih (FR-02).</p>
                         <div id="competency-display-area" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                            <!-- Display Area akan diisi oleh JS -->
+                            <!-- Konten Standar Kompetensi akan dimuat oleh JS -->
                         </div>
 
                         <button type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white font-semibold rounded-md shadow-md hover:bg-indigo-700 transition duration-150">
@@ -342,7 +344,6 @@
             const jobSelect = form.job;
             const currentJob = selectedJob || jobSelect.value;
             const displayArea = document.getElementById('competency-display-area');
-            // Ambil standar dari MOCK_JOB_COMPETENCIES yang sudah didefinisikan
             const jobCompetencies = window.MOCK_JOB_COMPETENCIES[currentJob] || {};
             
             let html = '';
@@ -359,6 +360,7 @@
         }
 
         // --- Master Data Management Component ---
+        // Fungsi yang menghasilkan HTML untuk halaman Kelola Master Data
         function getMasterDataHTML() {
             const renderMasterForm = (title, collectionName, data) => {
                 const dataList = data.map(item => `
@@ -607,12 +609,18 @@
                 btn.classList.remove('bg-indigo-500', 'font-semibold');
                 btn.classList.add('hover:bg-indigo-600');
             });
-            document.getElementById(`nav-${window.currentPage}`).classList.add('bg-indigo-500', 'font-semibold');
-            document.getElementById(`nav-${window.currentPage}`).classList.remove('hover:bg-indigo-600');
+            
+            // Check if the current page button exists before setting class
+            const currentNavButton = document.getElementById(`nav-${window.currentPage}`);
+            if (currentNavButton) {
+                currentNavButton.classList.add('bg-indigo-500', 'font-semibold');
+                currentNavButton.classList.remove('hover:bg-indigo-600');
+            }
 
 
             if (window.currentPage === 'add_employee') {
                 container.innerHTML = getAddEmployeeHTML();
+                // Panggil updateCompetencyDisplay agar display area terisi dengan standar kompetensi default
                 window.updateCompetencyDisplay();
             } else if (window.currentPage === 'master_data') {
                 container.innerHTML = getMasterDataHTML();

@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PT Nikomas TCM - HR Portal</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Chart.js for Dashboard Visualization (FR-07) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <style>
+        /* Menggunakan font Inter untuk tampilan bersih */
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+    <header class="bg-indigo-700 text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row justify-between items-center">
+            <h1 class="text-2xl font-bold mb-2 sm:mb-0">PT Nikomas TCM (HR Portal)</h1>
+            <nav class="flex space-x-4">
+                <button id="nav-dashboard" onclick="changePage('dashboard')" class="px-3 py-1 rounded-md transition duration-150 bg-indigo-500 font-semibold hover:bg-indigo-600">
+                    Dashboard (FR-07)
+                </button>
+                <button id="nav-add-employee" onclick="changePage('add_employee')" class="px-3 py-1 rounded-md transition duration-150 hover:bg-indigo-600">
+                    Tambah Karyawan (FR-01)
+                </button>
+            </nav>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Konten Halaman (Dashboard atau Add Employee) -->
+        <div id="content-container">
+            <!-- Konten akan di-load di sini oleh JavaScript -->
+        </div>
+        
+        <footer class="mt-8 text-center text-xs text-gray-500">
+            <p>App ID: <span id="app-id-display"></span></p>
+            <p>User ID: <span id="user-id-display"></span></p>
+            <p class="mt-1">Implementasi TCM (Skill Matrix) berbasis Odoo/React & Firestore.</p>
+        </footer>
+    </main>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, limit } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Set log level untuk debugging
+        setLogLevel('debug'); 
+
+        // --- 1. Konfigurasi Global ---
+        window.firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'tcm-hr-app';
+        window.employeesData = [];
+        window.currentPage = 'dashboard';
+        
+        // Data Master Mock-up (sesuai FR-01 dan FR-02)
+        window.MOCK_JOB_COMPETENCIES = {
+          'Operator Lini': {
+            'Kecepatan Stitching': 5,
+            'Kepatuhan SOP': 4,
+            'Analisis Defect': 3
+          },
+          'Supervisor Produksi': {
+            'Kecepatan Stitching': 4,
+            'Kepatuhan SOP': 5,
+            'Analisis Defect': 5,
+            'Kepemimpinan Tim': 5
+          },
+          'Staf HR T&D': {
+            'Analisis Defect': 2,
+            'Kepemimpinan Tim': 3,
+            'Kepatuhan SOP': 4
+          }
+        };
+
+        window.INITIAL_COMPETENCIES = Object.keys(window.MOCK_JOB_COMPETENCIES['Supervisor Produksi']);
+
+
+        // --- 2. Inisialisasi Firebase & Otentikasi ---
+        let dbInstance;
+        let authInstance;
+
+        async function initFirebase() {
+            if (Object.keys(window.firebaseConfig).length === 0) {
+                console.error("Firebase config is missing.");
+                document.getElementById('content-container').innerHTML = `<div class="p-8 bg-red-100 text-red-700 rounded-xl">Error: Konfigurasi Firebase tidak ditemukan. Gagal inisialisasi database.</div>`;
+                return;
+            }
+
+            const app = initializeApp(window.firebaseConfig);
+            dbInstance = getFirestore(app);
+            authInstance = getAuth(app);
+            window.db = dbInstance; // Set global instance
+            
+            document.getElementById('app-id-display').textContent = window.appId;
+
+            onAuthStateChanged(authInstance, (user) => {
+                if (user) {
+                    window.currentUserId = user.uid;
+                    document.getElementById('user-id-display').textContent = user.uid;
+                    startDataListener(dbInstance);
+                } else {
+                    // Coba sign in dengan custom token atau anonymous
+                    (async () => {
+                        try {
+                            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                                const userCredential = await signInWithCustomToken(authInstance, __initial_auth_token);
+                                window.currentUserId = userCredential.user.uid;
+                            } else {
+                                await signInAnonymously(authInstance);
+                                window.currentUserId = authInstance.currentUser?.uid || crypto.randomUUID();
+                            }
+                            document.getElementById('user-id-display').textContent = window.currentUserId;
+                            startDataListener(dbInstance);
+                        } catch (error) {
+                            console.error("Authentication failed:", error);
+                            document.getElementById('content-container').innerHTML = `<div class="p-8 bg-red-100 text-red-700 rounded-xl">Error: Autentikasi gagal. Silakan coba muat ulang.</div>`;
+                        }
+                    })();
+                }
+            });
+        }
+        
+        // --- 3. Listener Data Firestore (onSnapshot) ---
+        function startDataListener(db) {
+            const employeesColRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'employees');
+            const q = query(employeesColRef);
+
+            onSnapshot(q, (snapshot) => {
+                window.employeesData = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data(),
+                    competencies: doc.data().competencies || {}
+                }));
+                // Panggil render ulang setiap kali data berubah
+                window.renderPage(); 
+            }, (error) => {
+                console.error("Error fetching employees:", error);
+                document.getElementById('content-container').innerHTML = `<div class="p-8 bg-red-100 text-red-700 rounded-xl">Error mengambil data karyawan: ${error.message}</div>`;
+            });
+        }
+
+        // --- 4. Handler Submit Karyawan ---
+        window.handleSubmitEmployee = async function(event) {
+            event.preventDefault();
+            const form = event.target;
+            const nik = form.nik.value.trim();
+            const name = form.name.value.trim();
+            const job = form.job.value;
+            const division = form.division.value;
+            const messageEl = document.getElementById('form-message');
+
+            if (!window.db || !window.currentUserId) {
+                messageEl.className = "p-3 mb-4 rounded-lg text-sm bg-red-100 text-red-700";
+                messageEl.textContent = 'Error: Koneksi database tidak siap.';
+                return;
+            }
+
+            const competenciesData = {};
+            const jobCompetencies = window.MOCK_JOB_COMPETENCIES[job] || {};
+            
+            // Set Level Ideal sesuai Jabatan & Level Aktual awal = 0
+            Object.entries(jobCompetencies).forEach(([comp, ideal]) => {
+                competenciesData[comp] = { ideal: ideal, actual: 0 }; 
+            });
+
+            const newEmployee = {
+                nik: nik,
+                name: name,
+                job: job,
+                division: division,
+                competencies: competenciesData,
+                createdAt: new Date().toISOString(),
+                createdBy: window.currentUserId,
+            };
+
+            try {
+                // Menggunakan NIK sebagai Document ID
+                const docRef = doc(window.db, 'artifacts', window.appId, 'public', 'data', 'employees', nik);
+                await setDoc(docRef, newEmployee);
+                
+                messageEl.className = "p-3 mb-4 rounded-lg text-sm bg-green-100 text-green-700";
+                messageEl.textContent = 'Profil karyawan berhasil ditambahkan! Supervisor dapat mengisi penilaian.';
+                
+                // Reset form
+                form.reset();
+            } catch (error) {
+                console.error("Error adding document: ", error);
+                messageEl.className = "p-3 mb-4 rounded-lg text-sm bg-red-100 text-red-700";
+                messageEl.textContent = 'Gagal menambahkan karyawan: ' + error.message;
+            }
+        };
+
+        // Mulai inisialisasi
+        initFirebase();
+    </script>
+    
+    <!-- JavaScript Logika UI & Rendering -->
+    <script>
+        
+        // --- 5. Logic Utility untuk Chart Data ---
+        function calculateChartData(data) {
+            const totalGaps = {};
+            const count = {};
+            let ready = 0;
+            let needTraining = 0;
+
+            data.forEach(emp => {
+                let empTotalGap = 0;
+                let compCount = 0;
+                Object.entries(emp.competencies).forEach(([comp, { actual, ideal }]) => {
+                    const gap = ideal - actual;
+                    empTotalGap += gap;
+                    compCount += 1;
+                    
+                    // Agregasi untuk Bar Chart
+                    if (totalGaps[comp] === undefined) {
+                        totalGaps[comp] = 0;
+                        count[comp] = 0;
+                    }
+                    totalGaps[comp] += gap;
+                    count[comp] += 1;
+                });
+                
+                // Agregasi untuk Pie Chart (Talent Heatmap)
+                if (compCount > 0) {
+                    const avgGap = empTotalGap / compCount;
+                    if (avgGap > 1.5) {
+                        needTraining++;
+                    } else {
+                        ready++;
+                    }
+                }
+            });
+            
+            const labels = Object.keys(totalGaps);
+            const avgGaps = labels.map(comp => (totalGaps[comp] / (count[comp] || 1)));
+
+            return { labels, avgGaps, ready, needTraining };
+        }
+
+        // --- 6. Logic Rendering Komponen Halaman ---
+
+        function getAddEmployeeHTML() {
+            const jobs = Object.keys(window.MOCK_JOB_COMPETENCIES);
+            const divisions = ['Produksi 1', 'Produksi 2', 'QA/QC', 'HR'];
+            
+            // Set default job untuk menampilkan ideal level
+            const defaultJob = jobs[0]; 
+            const defaultCompetencies = window.MOCK_JOB_COMPETENCIES[defaultJob];
+
+            let competencyDisplay = '';
+            Object.entries(defaultCompetencies).forEach(([compName, idealLevel]) => {
+                competencyDisplay += `
+                    <div class="p-3 bg-indigo-50 rounded-md">
+                        <label class="block text-sm font-medium text-gray-700">${compName}:</label>
+                        <p class="font-bold text-lg text-indigo-700" id="ideal-level-${compName.replace(/\s/g, '_')}">${idealLevel}</p>
+                        <p class="text-xs text-gray-500">Level Ideal Wajib</p>
+                    </div>
+                `;
+            });
+            
+            let jobOptions = jobs.map(j => `<option value="${j}">${j}</option>`).join('');
+            let divisionOptions = divisions.map(d => `<option value="${d}">${d}</option>`).join('');
+
+            return `
+                <div class="p-6 bg-white rounded-xl shadow-lg border border-gray-100 max-w-4xl mx-auto">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4">Tambah Profil Karyawan (HR Admin)</h2>
+                    <p class="text-sm text-gray-500 mb-6">
+                      Gunakan formulir ini untuk membuat entri karyawan baru dan menetapkan Standar Kompetensi Ideal berdasarkan jabatan (FR-01, FR-02).
+                    </p>
+                    
+                    <div id="form-message" class="hidden"></div>
+
+                    <form onsubmit="window.handleSubmitEmployee(event)" class="space-y-4" id="add-employee-form">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">NIK (Nomor Induk Karyawan):</label>
+                                <input type="text" name="nik" onkeyup="updateCompetencyDisplay()" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" required />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Nama Lengkap:</label>
+                                <input type="text" name="name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" required />
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Jabatan:</label>
+                                <select name="job" onchange="updateCompetencyDisplay(this.value)" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white" required>
+                                    ${jobOptions}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Divisi:</label>
+                                <select name="division" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white" required>
+                                    ${divisionOptions}
+                                </select>
+                            </div>
+                        </div>
+
+                        <h3 class="text-lg font-semibold mt-6 text-indigo-600">Standar Kompetensi Ideal (Level 1-5)</h3>
+                        <p class="text-sm text-gray-500">Nilai ini otomatis ditetapkan berdasarkan Jabatan yang dipilih (FR-02).</p>
+                        <div id="competency-display-area" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <!-- Display Area akan diisi oleh JS -->
+                        </div>
+
+                        <button type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white font-semibold rounded-md shadow-md hover:bg-indigo-700 transition duration-150">
+                            SIMPAN PROFIL KARYAWAN
+                        </button>
+                    </form>
+                </div>
+            `;
+        }
+        
+        // Fungsi untuk mengupdate tampilan Ideal Level saat Job berubah
+        window.updateCompetencyDisplay = function(selectedJob) {
+            const form = document.getElementById('add-employee-form');
+            if (!form) return;
+            
+            const jobSelect = form.job;
+            const currentJob = selectedJob || jobSelect.value;
+            const displayArea = document.getElementById('competency-display-area');
+            const jobCompetencies = window.MOCK_JOB_COMPETENCIES[currentJob] || {};
+            
+            let html = '';
+            Object.entries(jobCompetencies).forEach(([compName, idealLevel]) => {
+                html += `
+                    <div class="p-3 bg-indigo-50 rounded-md">
+                        <label class="block text-sm font-medium text-gray-700">${compName}:</label>
+                        <p class="font-bold text-lg text-indigo-700">${idealLevel}</p>
+                        <p class="text-xs text-gray-500">Level Ideal Wajib</p>
+                    </div>
+                `;
+            });
+            displayArea.innerHTML = html;
+        }
+
+        // Panggil saat page load dan saat data berubah
+        window.renderDashboard = function() {
+            const data = window.employeesData;
+            const container = document.getElementById('content-container');
+            
+            const uniqueDivisions = ['Semua Divisi', ...new Set(data.map(e => e.division))];
+            const uniqueJobs = ['Semua Jabatan', ...new Set(data.map(e => e.job))];
+
+            // Filter Logic (mengambil nilai dari select)
+            const selectedDivision = document.getElementById('filter-division')?.value || 'Semua Divisi';
+            const selectedJob = document.getElementById('filter-job')?.value || 'Semua Jabatan';
+            
+            const filteredEmployees = data.filter(emp => {
+                const divisionMatch = selectedDivision === 'Semua Divisi' || emp.division === selectedDivision;
+                const jobMatch = selectedJob === 'Semua Jabatan' || emp.job === selectedJob;
+                return divisionMatch && jobMatch;
+            });
+
+            // Hitung data chart
+            const { labels, avgGaps, ready, needTraining } = calculateChartData(filteredEmployees);
+            
+            // --- HTML Dashboard ---
+            let html = `
+                <div class="space-y-8 p-6 bg-gray-50 rounded-xl shadow-inner">
+                    <h2 class="text-3xl font-extrabold text-indigo-800">Dashboard Talent & Competency (FR-07)</h2>
+                    <p class="text-gray-600">
+                      Visualisasi Kesenjangan Kompetensi Agregat (Talent Heatmap) PT Nikomas Gemilang.
+                      <span class="font-semibold">Total Karyawan Terdaftar: ${data.length}</span>
+                    </p>
+                    
+                    <!-- Filter Area -->
+                    <div class="flex flex-wrap gap-4 mb-6 p-4 bg-white rounded-lg shadow-md">
+                        <div class="w-full md:w-auto flex-grow">
+                            <label class="block text-sm font-medium text-gray-700">Filter Divisi:</label>
+                            <select id="filter-division" onchange="window.renderPage()" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
+                                ${uniqueDivisions.map(div => `<option value="${div}" ${div === selectedDivision ? 'selected' : ''}>${div}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="w-full md:w-auto flex-grow">
+                            <label class="block text-sm font-medium text-gray-700">Filter Jabatan:</label>
+                            <select id="filter-job" onchange="window.renderPage()" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border bg-white">
+                                ${uniqueJobs.map(job => `<option value="${job}" ${job === selectedJob ? 'selected' : ''}>${job}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md border">
+                            <h3 class="text-center font-bold mb-4">Competency Gap Agregat per Kompetensi</h3>
+                            <canvas id="gapBarChart"></canvas>
+                        </div>
+                        <div class="bg-white p-6 rounded-xl shadow-md border flex flex-col justify-center">
+                            <h3 class="text-center font-bold mb-4">Talent Status: Siap vs. Butuh Pelatihan</h3>
+                            <canvas id="heatmapPieChart" class="max-h-64 mx-auto"></canvas>
+                            <p class="text-xs text-gray-500 mt-4 text-center">
+                                *Pengambilan keputusan berbasis data: Karyawan dengan rata-rata Gap > 1.5 harus diutamakan dalam program pelatihan intensif.
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <!-- Tabel Detail Karyawan -->
+                    <h3 class="text-xl font-bold text-gray-800 pt-4">Tabel Detail Karyawan (${filteredEmployees.length} Hasil)</h3>
+                    ${renderEmployeeTable(filteredEmployees)}
+                </div>
+            `;
+            container.innerHTML = html;
+            
+            // Inisialisasi Chart.js setelah DOM dimuat
+            if (filteredEmployees.length > 0) {
+                initializeCharts(labels, avgGaps, ready, needTraining);
+            }
+        }
+        
+        function initializeCharts(labels, avgGaps, ready, needTraining) {
+            const gapBarCtx = document.getElementById('gapBarChart');
+            const heatmapPieCtx = document.getElementById('heatmapPieChart');
+            
+            // Chart 1: Bar Chart GAP
+            new ChartJS(gapBarCtx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Rata-Rata Competency Gap',
+                        data: avgGaps,
+                        backgroundColor: avgGaps.map(gap => gap > 1.5 ? '#f87171' : gap > 0.5 ? '#fbbf24' : '#34d399'),
+                        borderColor: avgGaps.map(gap => gap > 1.5 ? '#ef4444' : gap > 0.5 ? '#f59e0b' : '#059669'),
+                        borderWidth: 1,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { beginAtZero: true, max: 5, title: { display: true, text: 'Rata-Rata Gap' } }
+                    }
+                }
+            });
+            
+            // Chart 2: Pie Chart Heatmap
+            new ChartJS(heatmapPieCtx, {
+                type: 'pie',
+                data: {
+                    labels: ['Siap / Gap Rendah (Avg Gap <= 1.5)', 'Butuh Pelatihan Mendesak (Avg Gap > 1.5)'],
+                    datasets: [{
+                        label: 'Status Kesiapan Kompetensi',
+                        data: [ready, needTraining],
+                        backgroundColor: ['#34d399', '#f87171'],
+                        hoverBackgroundColor: ['#059669', '#ef4444'],
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+        }
+        
+        function renderEmployeeTable(employees) {
+            if (employees.length === 0) {
+                 return `<p class="p-6 text-center text-gray-500 bg-white rounded-xl shadow-md border">Tidak ada data karyawan yang cocok dengan filter ini.</p>`;
+            }
+
+            const headerHtml = window.INITIAL_COMPETENCIES.map(comp => `<th class="px-6 py-3 text-center text-xs font-medium text-indigo-600 uppercase tracking-wider">${comp} (Gap)</th>`).join('');
+
+            const rowsHtml = employees.map(emp => {
+                const totalGap = Object.entries(emp.competencies).reduce((sum, [, { actual, ideal }]) => sum + (ideal - actual), 0);
+                const avgGap = (totalGap / Object.keys(emp.competencies).length).toFixed(2);
+                
+                const compCellsHtml = window.INITIAL_COMPETENCIES.map(comp => {
+                    const compData = emp.competencies[comp] || { actual: 0, ideal: 0 };
+                    const gap = compData.ideal - compData.actual;
+                    const colorClass = gap > 1 ? 'text-red-600' : 'text-green-600';
+                    return `
+                        <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-semibold ${colorClass}">
+                            ${gap}
+                            <div class="text-xs text-gray-500">${compData.actual}/${compData.ideal}</div>
+                        </td>
+                    `;
+                }).join('');
+
+                const avgClass = avgGap > 1.5 ? 'bg-red-50 text-red-800' : 'bg-green-50 text-green-800';
+
+                return `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm font-medium text-gray-900">${emp.name}</div>
+                            <div class="text-xs text-gray-500">NIK: ${emp.nik}</div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm text-gray-700">${emp.job}</div>
+                            <div class="text-xs text-indigo-600">${emp.division}</div>
+                        </td>
+                        ${compCellsHtml}
+                        <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-bold ${avgClass}">
+                            ${avgGap}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            return `
+                <div class="overflow-x-auto bg-white rounded-xl shadow-md border">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-indigo-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-indigo-600 uppercase tracking-wider">NIK / Nama</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-indigo-600 uppercase tracking-wider">Jabatan / Divisi</th>
+                                ${headerHtml}
+                                <th class="px-6 py-3 text-center text-xs font-medium text-indigo-600 uppercase tracking-wider">Avg Gap</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${rowsHtml}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        // --- 7. Logic Navigasi & Render Utama ---
+
+        window.renderPage = function() {
+            const container = document.getElementById('content-container');
+            
+            // Hapus chart lama sebelum rendering ulang
+            const existingCharts = container.querySelectorAll('canvas');
+            existingCharts.forEach(canvas => {
+                ChartJS.getChart(canvas)?.destroy();
+            });
+            
+            // Update tampilan tombol navigasi
+            document.querySelectorAll('button[onclick^="changePage"]').forEach(btn => {
+                btn.classList.remove('bg-indigo-500', 'font-semibold');
+                btn.classList.add('hover:bg-indigo-600');
+            });
+            document.getElementById(`nav-${window.currentPage}`).classList.add('bg-indigo-500', 'font-semibold');
+            document.getElementById(`nav-${window.currentPage}`).classList.remove('hover:bg-indigo-600');
+
+
+            if (window.currentPage === 'add_employee') {
+                container.innerHTML = getAddEmployeeHTML();
+                // Panggil display update setelah form dimuat untuk default job
+                window.updateCompetencyDisplay();
+            } else {
+                window.renderDashboard();
+            }
+        };
+
+        window.changePage = function(page) {
+            window.currentPage = page;
+            window.renderPage();
+        }
+
+        // Render halaman pertama kali saat load
+        window.addEventListener('load', () => {
+            window.renderPage();
+        });
+
+    </script>
+
+</body>
+</html>

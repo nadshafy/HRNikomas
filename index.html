@@ -18,21 +18,23 @@
     <header class="bg-indigo-700 text-white shadow-lg">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row justify-between items-center">
             <h1 class="text-2xl font-bold mb-2 sm:mb-0">PT Nikomas TCM (HR Portal)</h1>
-            <nav class="flex space-x-4">
-                <button id="nav-dashboard" onclick="changePage('dashboard')" class="px-3 py-1 rounded-md transition duration-150 bg-indigo-500 font-semibold hover:bg-indigo-600">
-                    Dashboard (FR-07)
+            <nav class="flex flex-wrap space-x-2 sm:space-x-4">
+                <button id="nav-dashboard" onclick="changePage('dashboard')" class="px-3 py-1 rounded-md transition duration-150 bg-indigo-500 font-semibold hover:bg-indigo-600 text-sm">
+                    Dashboard
                 </button>
-                <button id="nav-add-employee" onclick="changePage('add_employee')" class="px-3 py-1 rounded-md transition duration-150 hover:bg-indigo-600">
-                    Tambah Karyawan (FR-01)
+                <button id="nav-add-employee" onclick="changePage('add_employee')" class="px-3 py-1 rounded-md transition duration-150 hover:bg-indigo-600 text-sm">
+                    Tambah Karyawan
+                </button>
+                <button id="nav-master_data" onclick="changePage('master_data')" class="px-3 py-1 rounded-md transition duration-150 hover:bg-indigo-600 text-sm">
+                    Kelola Master Data
                 </button>
             </nav>
         </div>
     </header>
 
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <!-- Konten Halaman (Dashboard atau Add Employee) -->
         <div id="content-container">
-            <!-- Konten akan di-load di sini oleh JavaScript -->
+            <div class="text-center p-12 text-gray-600">Memuat koneksi Firebase dan otentikasi...</div>
         </div>
         
         <footer class="mt-8 text-center text-xs text-gray-500">
@@ -46,7 +48,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, collection, query, limit } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Set log level untuk debugging
@@ -56,9 +58,11 @@
         window.firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
         window.appId = typeof __app_id !== 'undefined' ? __app_id : 'tcm-hr-app';
         window.employeesData = [];
+        window.divisionsData = [];
+        window.jobsData = [];
         window.currentPage = 'dashboard';
         
-        // Data Master Mock-up (sesuai FR-01 dan FR-02)
+        // Data Master Mock-up (sesuai FR-01 dan FR-02) - Digunakan untuk Standar Kompetensi
         window.MOCK_JOB_COMPETENCIES = {
           'Operator Lini': {
             'Kecepatan Stitching': 5,
@@ -84,6 +88,7 @@
         // --- 2. Inisialisasi Firebase & Otentikasi ---
         let dbInstance;
         let authInstance;
+        let isAuthReady = false;
 
         async function initFirebase() {
             if (Object.keys(window.firebaseConfig).length === 0) {
@@ -95,17 +100,14 @@
             const app = initializeApp(window.firebaseConfig);
             dbInstance = getFirestore(app);
             authInstance = getAuth(app);
-            window.db = dbInstance; // Set global instance
+            window.db = dbInstance;
             
             document.getElementById('app-id-display').textContent = window.appId;
 
             onAuthStateChanged(authInstance, (user) => {
                 if (user) {
                     window.currentUserId = user.uid;
-                    document.getElementById('user-id-display').textContent = user.uid;
-                    startDataListener(dbInstance);
                 } else {
-                    // Coba sign in dengan custom token atau anonymous
                     (async () => {
                         try {
                             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -115,34 +117,40 @@
                                 await signInAnonymously(authInstance);
                                 window.currentUserId = authInstance.currentUser?.uid || crypto.randomUUID();
                             }
-                            document.getElementById('user-id-display').textContent = window.currentUserId;
-                            startDataListener(dbInstance);
                         } catch (error) {
                             console.error("Authentication failed:", error);
-                            document.getElementById('content-container').innerHTML = `<div class="p-8 bg-red-100 text-red-700 rounded-xl">Error: Autentikasi gagal. Silakan coba muat ulang.</div>`;
                         }
                     })();
                 }
+                document.getElementById('user-id-display').textContent = window.currentUserId;
+                isAuthReady = true;
+                startDataListeners(dbInstance);
+                window.renderPage(); // Initial render after auth
             });
         }
         
-        // --- 3. Listener Data Firestore (onSnapshot) ---
-        function startDataListener(db) {
+        // --- 3. Listener Data Firestore (onSnapshot) - MULTI-LISTENER ---
+        function startDataListeners(db) {
+            // Listener 1: Karyawan Data
             const employeesColRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'employees');
-            const q = query(employeesColRef);
-
-            onSnapshot(q, (snapshot) => {
-                window.employeesData = snapshot.docs.map(doc => ({
-                    id: doc.id,
-                    ...doc.data(),
-                    competencies: doc.data().competencies || {}
-                }));
-                // Panggil render ulang setiap kali data berubah
+            onSnapshot(query(employeesColRef), (snapshot) => {
+                window.employeesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), competencies: doc.data().competencies || {} }));
                 window.renderPage(); 
-            }, (error) => {
-                console.error("Error fetching employees:", error);
-                document.getElementById('content-container').innerHTML = `<div class="p-8 bg-red-100 text-red-700 rounded-xl">Error mengambil data karyawan: ${error.message}</div>`;
-            });
+            }, (error) => console.error("Error fetching employees:", error));
+
+            // Listener 2: Divisi Data
+            const divisionsColRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'divisions');
+            onSnapshot(query(divisionsColRef), (snapshot) => {
+                window.divisionsData = snapshot.docs.map(doc => doc.data().name);
+                window.renderPage();
+            }, (error) => console.error("Error fetching divisions:", error));
+
+            // Listener 3: Jabatan Data
+            const jobsColRef = collection(db, 'artifacts', window.appId, 'public', 'data', 'jobs');
+            onSnapshot(query(jobsColRef), (snapshot) => {
+                window.jobsData = snapshot.docs.map(doc => doc.data().name);
+                window.renderPage();
+            }, (error) => console.error("Error fetching jobs:", error));
         }
 
         // --- 4. Handler Submit Karyawan ---
@@ -162,9 +170,9 @@
             }
 
             const competenciesData = {};
+            // Mengambil standar dari MOCK (karena Standar Kompetensi adalah FR-02)
             const jobCompetencies = window.MOCK_JOB_COMPETENCIES[job] || {};
             
-            // Set Level Ideal sesuai Jabatan & Level Aktual awal = 0
             Object.entries(jobCompetencies).forEach(([comp, ideal]) => {
                 competenciesData[comp] = { ideal: ideal, actual: 0 }; 
             });
@@ -180,14 +188,11 @@
             };
 
             try {
-                // Menggunakan NIK sebagai Document ID
                 const docRef = doc(window.db, 'artifacts', window.appId, 'public', 'data', 'employees', nik);
                 await setDoc(docRef, newEmployee);
                 
                 messageEl.className = "p-3 mb-4 rounded-lg text-sm bg-green-100 text-green-700";
                 messageEl.textContent = 'Profil karyawan berhasil ditambahkan! Supervisor dapat mengisi penilaian.';
-                
-                // Reset form
                 form.reset();
             } catch (error) {
                 console.error("Error adding document: ", error);
@@ -196,6 +201,31 @@
             }
         };
 
+        // --- 5. Handler Submit Master Data (Divisi/Jabatan) ---
+        window.handleSubmitMasterData = async function(event, collectionName) {
+            event.preventDefault();
+            const form = event.target;
+            const name = form.new_master_name.value.trim();
+            const messageEl = document.getElementById(`master-message-${collectionName}`);
+
+            if (!window.db || !name) return;
+
+            try {
+                // Gunakan nama sebagai ID dokumen untuk memastikan keunikan
+                const docRef = doc(window.db, 'artifacts', window.appId, 'public', 'data', collectionName, name.replace(/\s/g, '_').toLowerCase());
+                await setDoc(docRef, { name: name, createdAt: new Date().toISOString() });
+                
+                messageEl.className = "p-3 mt-2 rounded-lg text-sm bg-green-100 text-green-700";
+                messageEl.textContent = `${name} berhasil ditambahkan!`;
+                form.reset();
+            } catch (error) {
+                console.error(`Error adding ${collectionName}:`, error);
+                messageEl.className = "p-3 mt-2 rounded-lg text-sm bg-red-100 text-red-700";
+                messageEl.textContent = `Gagal menambahkan ${name}. Error: ${error.message}`;
+            }
+        };
+
+
         // Mulai inisialisasi
         initFirebase();
     </script>
@@ -203,8 +233,9 @@
     <!-- JavaScript Logika UI & Rendering -->
     <script>
         
-        // --- 5. Logic Utility untuk Chart Data ---
+        // --- 6. Logic Utility untuk Chart Data ---
         function calculateChartData(data) {
+            // (Logika perhitungan Chart.js sama seperti sebelumnya, tidak diubah)
             const totalGaps = {};
             const count = {};
             let ready = 0;
@@ -218,7 +249,6 @@
                     empTotalGap += gap;
                     compCount += 1;
                     
-                    // Agregasi untuk Bar Chart
                     if (totalGaps[comp] === undefined) {
                         totalGaps[comp] = 0;
                         count[comp] = 0;
@@ -227,7 +257,6 @@
                     count[comp] += 1;
                 });
                 
-                // Agregasi untuk Pie Chart (Talent Heatmap)
                 if (compCount > 0) {
                     const avgGap = empTotalGap / compCount;
                     if (avgGap > 1.5) {
@@ -244,26 +273,14 @@
             return { labels, avgGaps, ready, needTraining };
         }
 
-        // --- 6. Logic Rendering Komponen Halaman ---
+        // --- 7. Logic Rendering Komponen Halaman ---
 
         function getAddEmployeeHTML() {
-            const jobs = Object.keys(window.MOCK_JOB_COMPETENCIES);
-            const divisions = ['Produksi 1', 'Produksi 2', 'QA/QC', 'HR'];
+            // Ambil data Divisi dan Jabatan dari state global
+            const jobs = window.jobsData.length > 0 ? window.jobsData : Object.keys(window.MOCK_JOB_COMPETENCIES);
+            const divisions = window.divisionsData.length > 0 ? window.divisionsData : ['Produksi 1', 'QA/QC', 'HR'];
             
-            // Set default job untuk menampilkan ideal level
             const defaultJob = jobs[0]; 
-            const defaultCompetencies = window.MOCK_JOB_COMPETENCIES[defaultJob];
-
-            let competencyDisplay = '';
-            Object.entries(defaultCompetencies).forEach(([compName, idealLevel]) => {
-                competencyDisplay += `
-                    <div class="p-3 bg-indigo-50 rounded-md">
-                        <label class="block text-sm font-medium text-gray-700">${compName}:</label>
-                        <p class="font-bold text-lg text-indigo-700" id="ideal-level-${compName.replace(/\s/g, '_')}">${idealLevel}</p>
-                        <p class="text-xs text-gray-500">Level Ideal Wajib</p>
-                    </div>
-                `;
-            });
             
             let jobOptions = jobs.map(j => `<option value="${j}">${j}</option>`).join('');
             let divisionOptions = divisions.map(d => `<option value="${d}">${d}</option>`).join('');
@@ -281,7 +298,7 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">NIK (Nomor Induk Karyawan):</label>
-                                <input type="text" name="nik" onkeyup="updateCompetencyDisplay()" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" required />
+                                <input type="text" name="nik" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" required />
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Nama Lengkap:</label>
@@ -325,6 +342,7 @@
             const jobSelect = form.job;
             const currentJob = selectedJob || jobSelect.value;
             const displayArea = document.getElementById('competency-display-area');
+            // Ambil standar dari MOCK_JOB_COMPETENCIES yang sudah didefinisikan
             const jobCompetencies = window.MOCK_JOB_COMPETENCIES[currentJob] || {};
             
             let html = '';
@@ -340,15 +358,63 @@
             displayArea.innerHTML = html;
         }
 
+        // --- Master Data Management Component ---
+        function getMasterDataHTML() {
+            const renderMasterForm = (title, collectionName, data) => {
+                const dataList = data.map(item => `
+                    <li class="p-2 border-b text-sm flex justify-between items-center">
+                        <span>${item}</span>
+                        <span class="text-xs text-gray-500">(${data.indexOf(item) + 1})</span>
+                    </li>
+                `).join('');
+
+                return `
+                    <div class="bg-white p-6 rounded-xl shadow-md border">
+                        <h3 class="text-xl font-bold text-indigo-600 mb-4">${title}</h3>
+                        <form onsubmit="window.handleSubmitMasterData(event, '${collectionName}')" class="mb-6">
+                            <label class="block text-sm font-medium text-gray-700">Nama Baru:</label>
+                            <div class="flex space-x-2 mt-1">
+                                <input type="text" name="new_master_name" class="block w-full rounded-md border-gray-300 shadow-sm p-2 border" required />
+                                <button type="submit" class="px-4 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 transition duration-150">
+                                    Tambah
+                                </button>
+                            </div>
+                        </form>
+                        <div id="master-message-${collectionName}"></div>
+                        <h4 class="font-semibold text-gray-700 mt-4">Daftar Aktif (${data.length}):</h4>
+                        <ul class="border rounded-md mt-2 max-h-64 overflow-y-auto">
+                            ${dataList.length > 0 ? dataList : '<li class="p-3 text-sm text-gray-500">Belum ada data.</li>'}
+                        </ul>
+                        <p class="text-xs text-red-500 mt-4">Penting: Data Divisi dan Jabatan akan digunakan untuk *dropdown* Karyawan.</p>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="space-y-8 max-w-6xl mx-auto">
+                    <h2 class="text-3xl font-extrabold text-indigo-800">Kelola Master Data (Divisi & Jabatan)</h2>
+                    <p class="text-gray-600">
+                        Gunakan halaman ini untuk menambahkan data master Divisi dan Jabatan baru. Data ini disimpan di Firestore dan akan muncul secara dinamis di formulir Tambah Karyawan.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        ${renderMasterForm('Kelola Divisi', 'divisions', window.divisionsData)}
+                        ${renderMasterForm('Kelola Jabatan', 'jobs', window.jobsData)}
+                    </div>
+                </div>
+            `;
+        }
+
+
         // Panggil saat page load dan saat data berubah
         window.renderDashboard = function() {
             const data = window.employeesData;
             const container = document.getElementById('content-container');
             
+            // (Logika filter dan rendering Dashboard sama seperti sebelumnya)
+            
             const uniqueDivisions = ['Semua Divisi', ...new Set(data.map(e => e.division))];
             const uniqueJobs = ['Semua Jabatan', ...new Set(data.map(e => e.job))];
 
-            // Filter Logic (mengambil nilai dari select)
             const selectedDivision = document.getElementById('filter-division')?.value || 'Semua Divisi';
             const selectedJob = document.getElementById('filter-job')?.value || 'Semua Jabatan';
             
@@ -358,7 +424,6 @@
                 return divisionMatch && jobMatch;
             });
 
-            // Hitung data chart
             const { labels, avgGaps, ready, needTraining } = calculateChartData(filteredEmployees);
             
             // --- HTML Dashboard ---
@@ -413,12 +478,16 @@
             }
         }
         
+        // (Fungsi initializeCharts dan renderEmployeeTable tidak diubah)
         function initializeCharts(labels, avgGaps, ready, needTraining) {
             const gapBarCtx = document.getElementById('gapBarChart');
             const heatmapPieCtx = document.getElementById('heatmapPieChart');
             
-            // Chart 1: Bar Chart GAP
-            new ChartJS(gapBarCtx, {
+            // Hapus instance chart yang ada sebelum membuat yang baru
+            if (window.gapBarChartInstance) window.gapBarChartInstance.destroy();
+            if (window.heatmapPieChartInstance) window.heatmapPieChartInstance.destroy();
+
+            window.gapBarChartInstance = new ChartJS(gapBarCtx, {
                 type: 'bar',
                 data: {
                     labels: labels,
@@ -438,8 +507,7 @@
                 }
             });
             
-            // Chart 2: Pie Chart Heatmap
-            new ChartJS(heatmapPieCtx, {
+            window.heatmapPieChartInstance = new ChartJS(heatmapPieCtx, {
                 type: 'pie',
                 data: {
                     labels: ['Siap / Gap Rendah (Avg Gap <= 1.5)', 'Butuh Pelatihan Mendesak (Avg Gap > 1.5)'],
@@ -468,7 +536,8 @@
 
             const rowsHtml = employees.map(emp => {
                 const totalGap = Object.entries(emp.competencies).reduce((sum, [, { actual, ideal }]) => sum + (ideal - actual), 0);
-                const avgGap = (totalGap / Object.keys(emp.competencies).length).toFixed(2);
+                const compCount = Object.keys(emp.competencies).length;
+                const avgGap = (totalGap / (compCount || 1)).toFixed(2);
                 
                 const compCellsHtml = window.INITIAL_COMPETENCIES.map(comp => {
                     const compData = emp.competencies[comp] || { actual: 0, ideal: 0 };
@@ -521,7 +590,8 @@
             `;
         }
 
-        // --- 7. Logic Navigasi & Render Utama ---
+
+        // --- 8. Logic Navigasi & Render Utama ---
 
         window.renderPage = function() {
             const container = document.getElementById('content-container');
@@ -543,8 +613,9 @@
 
             if (window.currentPage === 'add_employee') {
                 container.innerHTML = getAddEmployeeHTML();
-                // Panggil display update setelah form dimuat untuk default job
                 window.updateCompetencyDisplay();
+            } else if (window.currentPage === 'master_data') {
+                container.innerHTML = getMasterDataHTML();
             } else {
                 window.renderDashboard();
             }
